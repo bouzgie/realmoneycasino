@@ -1,0 +1,249 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WormGPT Casino</title>
+<link rel="icon" type="image/png" href="/static/favicon.png">
+<style>
+:root { --primary: #0f172a; --accent: #f59e0b; --bg: #1e293b; --text: #f8fafc; }
+body { font-family: 'Segoe UI', sans-serif; background-color: var(--bg); color: var(--text); margin: 0; display: flex; height: 100vh; overflow: hidden; }
+.sidebar { width: 260px; background: var(--primary); padding: 20px; display: flex; flex-direction: column; box-shadow: 2px 0 10px rgba(0,0,0,0.3); }
+.logo { font-size: 22px; font-weight: bold; color: var(--accent); margin-bottom: 40px; text-align: center; letter-spacing: 1px; }
+.nav-btn { background: none; border: none; color: #94a3b8; padding: 14px 20px; cursor: pointer; text-align: left; font-size: 15px; transition: 0.2s; border-radius: 8px; margin-bottom: 5px; }
+.nav-btn:hover { background: #334155; color: white; }
+.nav-btn.active { background: var(--accent); color: #000; font-weight: bold; }
+.main-content { flex: 1; padding: 40px; overflow-y: auto; }
+.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 30px; padding-bottom: 20px; border-bottom: 1px solid #334155; }
+.balance-card { background: #334155; padding: 12px 25px; border-radius: 50px; font-size: 18px; font-weight: bold; color: var(--accent); }
+.section { display: none; animation: fadeIn 0.3s; }
+.section.active { display: block; }
+@keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+.card-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 20px; }
+.game-card { background: #334155; padding: 25px; border-radius: 16px; text-align: center; border: 1px solid #475569; }
+.game-card.clickable { cursor: pointer; transition: 0.3s; }
+.game-card.clickable:hover { transform: translateY(-5px); background: #475569; border-color: var(--accent); }
+.game-title { font-size: 19px; font-weight: bold; margin-bottom: 10px; color: var(--accent); }
+input { width: 100%; padding: 14px; border-radius: 8px; border: 1px solid #475569; background: #0f172a; color: white; margin-bottom: 15px; box-sizing: border-box; font-size: 16px; }
+button.action-btn { width: 100%; padding: 14px; background: var(--accent); color: #000; border: none; border-radius: 8px; font-weight: bold; cursor: pointer; margin-top: 10px; font-size: 16px; }
+button.action-btn:hover { filter: brightness(1.1); }
+.bet-row { display: flex; justify-content: space-between; padding: 12px; border-bottom: 1px solid #334155; }
+#authScreen { position: fixed; inset: 0; background: var(--bg); display: none; align-items: center; justify-content: center; z-index: 10; }
+#authScreen .game-card { width: 340px; }
+.link { color: var(--accent); cursor: pointer; font-size: 14px; }
+</style>
+</head>
+<body>
+<div id="authScreen">
+  <div class="game-card">
+    <div class="game-title" id="authTitle">Login</div>
+    <input id="authUser" placeholder="Username" autocomplete="username">
+    <input id="authPass" type="password" placeholder="Password" autocomplete="current-password">
+    <button class="action-btn" id="authSubmit">Login</button>
+    <p class="link" id="authToggle">No account? Register</p>
+  </div>
+</div>
+
+<div class="sidebar">
+  <div class="logo">WormGPT 💰</div>
+  <button class="nav-btn active" data-section="dashboard">Dashboard</button>
+  <button class="nav-btn" data-section="slots">Slots</button>
+  <button class="nav-btn" data-section="poker">Poker</button>
+  <button class="nav-btn" data-section="sports">Sports</button>
+  <button class="nav-btn" data-section="admin" id="adminBtn" style="margin-top:auto; display:none;">Admin</button>
+  <button class="nav-btn" id="logoutBtn" style="color:#ef4444;">Logout</button>
+</div>
+
+<div class="main-content">
+  <div class="header">
+    <h2 id="pageTitle">Dashboard</h2>
+    <div class="balance-card">Balance: $<span id="userBalance">0.00</span></div>
+  </div>
+
+  <div id="dashboard" class="section active">
+    <div class="card-grid">
+      <div class="game-card clickable" data-section="slots"><div class="game-title">🎰 Slot Machines</div><p>Classic reels with high payouts</p></div>
+      <div class="game-card clickable" data-section="sports"><div class="game-title">⚽ Sports Betting</div><p>Win big on global events</p></div>
+    </div>
+  </div>
+
+  <div id="slots" class="section">
+    <div class="card-grid">
+      <div class="game-card"><div class="game-title">🍒 Cherry Slots</div><p>Multiplier: 2.0x</p>
+        <input type="number" id="slotBet1" value="10" min="1"><button class="action-btn" data-slot="cherry" data-input="slotBet1">SPIN</button></div>
+      <div class="game-card"><div class="game-title">💎 Diamond Slots</div><p>Multiplier: 5.0x</p>
+        <input type="number" id="slotBet2" value="10" min="1"><button class="action-btn" data-slot="diamond" data-input="slotBet2">SPIN</button></div>
+    </div>
+  </div>
+
+  <div id="poker" class="section">
+    <div class="game-card">
+      <div class="game-title">🃏 Casino Hold'em</div>
+      <p>The server deals your cards.</p>
+      <input type="number" id="pokerBet" value="20" min="1">
+      <button class="action-btn" id="pokerBtn">DEAL</button>
+      <div id="pokerResult"></div>
+    </div>
+  </div>
+
+  <div id="sports" class="section"><div class="card-grid" id="sportsList"></div></div>
+
+  <div id="admin" class="section">
+    <h3>Admin Dashboard</h3>
+    <div class="card-grid">
+      <div class="game-card"><div class="game-title">Total Users</div><div id="adminUserCount">0</div></div>
+      <div class="game-card"><div class="game-title">Total Transactions</div><div id="adminRevenue">0</div></div>
+    </div>
+    <h3 style="margin-top:20px;">User List</h3>
+    <div id="adminUserList"></div>
+  </div>
+</div>
+
+<script>
+let token = localStorage.getItem('token');
+let balance = 0;
+let registering = false;
+const $ = id => document.getElementById(id);
+const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const auth = () => ({ 'Authorization': `Bearer ${token}` });
+const setBalance = b => { balance = Number(b); $('userBalance').textContent = balance.toFixed(2); };
+
+function validBet(v) { return Number.isFinite(v) && v > 0 && v <= balance; }
+
+async function api(url, opts = {}) {
+  const res = await fetch(url, opts);
+  if (res.status === 401) { logout(); throw new Error('Session expired'); }
+  const data = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(data.detail || 'Request failed');
+  return data;
+}
+
+function showAuth(show) { $('authScreen').style.display = show ? 'flex' : 'none'; }
+function renderAuth() {
+  $('authTitle').textContent = registering ? 'Register' : 'Login';
+  $('authSubmit').textContent = registering ? 'Register' : 'Login';
+  $('authToggle').textContent = registering ? 'Have an account? Login' : 'No account? Register';
+}
+
+async function submitAuth() {
+  const user = $('authUser').value.trim(), pass = $('authPass').value;
+  if (!user || !pass) return alert('Enter username and password');
+  try {
+    if (registering) {
+      await api('/register', { method: 'POST', headers: {'Content-Type':'application/json'},
+        body: JSON.stringify({ username: user, email: user + '@test.com', password: pass }) });
+      registering = false; renderAuth(); alert('Registered! Please login.');
+    } else {
+      const data = await api('/token', { method: 'POST', body: new URLSearchParams({ username: user, password: pass }) });
+      token = data.access_token; localStorage.setItem('token', token);
+      showAuth(false); await init();
+    }
+  } catch (e) { alert(e.message); }
+}
+
+function logout() {
+  localStorage.removeItem('token'); token = null;
+  $('adminBtn').style.display = 'none';
+  showAuth(true);
+}
+
+async function init() {
+  if (!token) return showAuth(true);
+  try {
+    const p = await api('/profile', { headers: auth() });
+    setBalance(p.balance);
+    // UI hint only. The server must enforce admin rights on /admin/*.
+    $('adminBtn').style.display = p.is_admin ? 'block' : 'none';
+  } catch (e) { /* logout handled in api() */ }
+}
+
+function showSection(id) {
+  document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+  $(id).classList.add('active');
+  document.querySelectorAll('.nav-btn[data-section]').forEach(b => b.classList.toggle('active', b.dataset.section === id));
+  $('pageTitle').textContent = id.charAt(0).toUpperCase() + id.slice(1);
+  if (id === 'sports') loadSports();
+  if (id === 'admin') loadAdmin();
+}
+
+async function playSlot(game, bet) {
+  if (!validBet(bet)) return alert('Invalid bet or insufficient funds');
+  try {
+    const data = await api('/slots/spin', { method: 'POST',
+      headers: { ...auth(), 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ game_name: game, bet_amount: bet }) });
+    setBalance(data.balance);
+    alert(`${data.results.join(' - ')}\n${data.win_amount > 0 ? 'WIN! $' + data.win_amount : ''}`);
+  } catch (e) { alert(e.message); }
+}
+
+async function playPoker() {
+  const bet = parseFloat($('pokerBet').value);
+  if (!validBet(bet)) return alert('Invalid bet or insufficient funds');
+  try {
+    // Server deals and evaluates. Client sends only the bet.
+    const data = await api('/poker', { method: 'POST',
+      headers: { ...auth(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount: bet }) });
+    setBalance(data.balance);
+    $('pokerResult').textContent = `Cards: ${(data.cards || []).join(', ')} | ${data.hand_name} | ${data.status} | Won: $${data.winnings}`;
+  } catch (e) { alert(e.message); }
+}
+
+async function loadSports() {
+  try {
+    const events = await api('/sports/events');
+    const box = $('sportsList'); box.innerHTML = '';
+    events.forEach(e => {
+      const card = document.createElement('div'); card.className = 'game-card';
+      card.innerHTML = `<div class="game-title">${esc(e.event_name)}</div><p>${esc(e.league)}</p>
+        <div style="margin:15px 0;"></div>`;
+      const row = card.lastElementChild;
+      [['Home', e.odds_home], ['Away', e.odds_away]].forEach(([sel, odds]) => {
+        const b = document.createElement('button');
+        b.textContent = `${sel} @ ${odds}`; b.style.marginRight = '5px';
+        b.onclick = () => placeBet(e.id, sel);
+        row.appendChild(b);
+      });
+      box.appendChild(card);
+    });
+  } catch (e) { alert(e.message); }
+}
+
+async function placeBet(id, selection) {
+  const amt = parseFloat(prompt(`Enter bet amount for ${selection}:`));
+  if (!validBet(amt)) return alert('Invalid bet or insufficient funds');
+  try {
+    const data = await api('/sports/bet', { method: 'POST',
+      headers: { ...auth(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ event_id: id, selection, amount: amt }) });
+    setBalance(data.balance);
+    alert(`Result: ${data.status}. Won: $${data.winnings}`);
+  } catch (e) { alert(e.message); }
+}
+
+async function loadAdmin() {
+  try {
+    const data = await api('/admin/dashboard', { headers: auth() });
+    $('adminUserCount').textContent = data.total_users;
+    $('adminRevenue').textContent = data.total_transactions;
+    const list = $('adminUserList'); list.innerHTML = '';
+    data.users.forEach(u => {
+      const row = document.createElement('div'); row.className = 'bet-row';
+      row.innerHTML = `<span>${esc(u.username)}</span><span>$${esc(u.balance)}</span>`;
+      list.appendChild(row);
+    });
+  } catch (e) { alert(e.message); }
+}
+
+document.querySelectorAll('[data-section]').forEach(el => el.addEventListener('click', () => showSection(el.dataset.section)));
+document.querySelectorAll('[data-slot]').forEach(el => el.addEventListener('click', () => playSlot(el.dataset.slot, parseFloat($(el.dataset.input).value))));
+$('pokerBtn').addEventListener('click', playPoker);
+$('logoutBtn').addEventListener('click', logout);
+$('authSubmit').addEventListener('click', submitAuth);
+$('authToggle').addEventListener('click', () => { registering = !registering; renderAuth(); });
+$('authPass').addEventListener('keydown', e => { if (e.key === 'Enter') submitAuth(); });
+window.onload = init;
+</script>
+</body>
+</html>
