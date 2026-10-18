@@ -109,6 +109,21 @@ button.action-btn:hover { filter: brightness(1.1); }
       <div class="game-card"><div class="game-title">Total Users</div><div id="adminUserCount">0</div></div>
       <div class="game-card"><div class="game-title">Total Transactions</div><div id="adminRevenue">0</div></div>
     </div>
+    <h3 style="margin-top:20px;">Slots controls</h3>
+    <div class="game-card" style="text-align:left;">
+      <label><input type="checkbox" id="sEnabled" style="width:auto;margin-right:8px;">Slots enabled (off = players see "temporarily unavailable")</label>
+      <p>Payout dial: <b id="sScaleLbl"></b> (1.00 = normal, 0.50 = half the win rate, 0 = no wins)</p>
+      <input type="range" id="sScale" min="0" max="2" step="0.05">
+      <p>Max win per spin ($). Bets are capped so no spin can pay more than this.</p>
+      <input type="number" id="sMaxWin" min="1">
+      <p>Daily payout cap ($, 0 = off). Slots pause automatically when 24h winnings reach it. Paid last 24h: <b id="sPaid"></b></p>
+      <input type="number" id="sDaily" min="0">
+      <p>Cherry jackpot: chance (0.005 = 0.5%) and multiplier</p>
+      <input type="number" id="sCJC" step="0.001" min="0" max="0.1"><input type="number" id="sCJM" min="1">
+      <p>Diamond jackpot: chance and multiplier</p>
+      <input type="number" id="sDJC" step="0.001" min="0" max="0.1"><input type="number" id="sDJM" min="1">
+      <button class="action-btn" id="sSave">SAVE SLOT SETTINGS</button>
+    </div>
     <h3 style="margin-top:20px;">Credit a user</h3>
     <input id="crUser" placeholder="Username"><input type="number" id="crAmount" placeholder="Amount">
     <button class="action-btn" id="crBtn">ADD FUNDS</button>
@@ -186,7 +201,7 @@ function showSection(id) {
   document.querySelectorAll('.nav-btn[data-section]').forEach(b => b.classList.toggle('active', b.dataset.section === id));
   $('pageTitle').textContent = id.charAt(0).toUpperCase() + id.slice(1);
   if (id === 'sports') loadSports();
-  if (id === 'admin') loadAdmin();
+  if (id === 'admin') { loadAdmin(); loadSlotCfg().catch(() => {}); }
 }
 
 async function playSlot(game, bet) {
@@ -196,7 +211,7 @@ async function playSlot(game, bet) {
       headers: { ...auth(), 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ game_name: game, bet_amount: bet }) });
     setBalance(data.balance);
-    alert(`${data.results.join(' - ')}\n${data.win_amount > 0 ? 'WIN! $' + data.win_amount : ''}`);
+    alert(`${data.results.join(' - ')}\n${data.result === 'JACKPOT' ? 'JACKPOT! $' + data.win_amount : data.win_amount > 0 ? 'WIN! $' + data.win_amount : ''}`);
   } catch (e) { alert(e.message); }
 }
 
@@ -283,6 +298,25 @@ async function loadAdmin() {
   } catch (e) { alert(e.message); }
 }
 
+async function loadSlotCfg() {
+  const c = await api('/admin/slots', { headers: auth() });
+  $('sEnabled').checked = c.enabled; $('sScale').value = c.win_scale; $('sScaleLbl').textContent = Number(c.win_scale).toFixed(2);
+  $('sMaxWin').value = c.max_win_per_spin; $('sDaily').value = c.daily_payout_cap;
+  $('sCJC').value = c.cherry_jackpot_chance; $('sCJM').value = c.cherry_jackpot_mult;
+  $('sDJC').value = c.diamond_jackpot_chance; $('sDJM').value = c.diamond_jackpot_mult;
+  $('sPaid').textContent = '$' + Number(c.paid_out_24h).toFixed(2);
+}
+
+async function saveSlotCfg() {
+  try {
+    await api('/admin/slots', { method: 'POST', headers: { ...auth(), 'Content-Type': 'application/json' }, body: JSON.stringify({
+      enabled: $('sEnabled').checked, win_scale: parseFloat($('sScale').value), max_win_per_spin: parseFloat($('sMaxWin').value),
+      daily_payout_cap: parseFloat($('sDaily').value) || 0, cherry_jackpot_chance: parseFloat($('sCJC').value), cherry_jackpot_mult: parseFloat($('sCJM').value),
+      diamond_jackpot_chance: parseFloat($('sDJC').value), diamond_jackpot_mult: parseFloat($('sDJM').value) }) });
+    alert('Slot settings saved'); loadSlotCfg();
+  } catch (e) { alert(e.message); }
+}
+
 async function requestWithdrawal() {
   const amount = parseFloat($('wdAmount').value);
   if (!validBet(amount)) return alert('Invalid amount or insufficient funds');
@@ -314,6 +348,8 @@ document.querySelectorAll('[data-section]').forEach(el => el.addEventListener('c
 document.querySelectorAll('[data-slot]').forEach(el => el.addEventListener('click', () => playSlot(el.dataset.slot, parseFloat($(el.dataset.input).value))));
 $('pokerBtn').addEventListener('click', playPoker);
 $('depBtn').addEventListener('click', requestDeposit);
+$('sSave').addEventListener('click', saveSlotCfg);
+$('sScale').addEventListener('input', () => $('sScaleLbl').textContent = Number($('sScale').value).toFixed(2));
 $('wdBtn').addEventListener('click', requestWithdrawal);
 $('crBtn').addEventListener('click', adminCredit);
 $('logoutBtn').addEventListener('click', logout);

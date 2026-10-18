@@ -37,6 +37,7 @@ def init_db():
     CREATE TABLE IF NOT EXISTS ledger(id INTEGER PRIMARY KEY, user_id INTEGER, kind TEXT, amount TEXT, ref TEXT UNIQUE, created REAL);
     CREATE TABLE IF NOT EXISTS withdrawals(id INTEGER PRIMARY KEY, user_id INTEGER, amount TEXT, details TEXT, status TEXT DEFAULT 'pending', created REAL);
     CREATE TABLE IF NOT EXISTS deposits(id INTEGER PRIMARY KEY, user_id INTEGER, amount TEXT, reference TEXT, status TEXT DEFAULT 'pending', created REAL);
+    CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
     CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, event_name TEXT, league TEXT, odds_home REAL, odds_away REAL);
     """)
     if not c.execute("SELECT 1 FROM events").fetchone():
@@ -123,17 +124,44 @@ def profile(u=Depends(user_from_token)):
     return {"username": u["username"], "balance": float(u["balance"]), "is_admin": bool(u["is_admin"])}
 
 # ---------- games (all outcomes decided here, never by the browser) ----------
+SLOT_DEFAULTS = {"enabled": True, "win_scale": 1.0, "max_win_per_spin": 5000.0, "daily_payout_cap": 0.0,
+                 "cherry_jackpot_chance": 0.005, "cherry_jackpot_mult": 20.0,
+                 "diamond_jackpot_chance": 0.002, "diamond_jackpot_mult": 50.0}
+SLOT_GAMES = {"cherry": (Decimal("2.0"), 0.425, ["🍒", "🍋", "🔔"]), "diamond": (Decimal("5.0"), 0.17, ["💎", "7️⃣", "⭐"])}
+
+def slot_settings():
+    row = db().execute("SELECT value FROM settings WHERE key='slots'").fetchone()
+    return {**SLOT_DEFAULTS, **(json.loads(row["value"]) if row else {})}
+
+def paid_out_today():
+    since = time.time() - 86400
+    r = db().execute("SELECT COALESCE(SUM(CAST(amount AS REAL)),0) t FROM ledger WHERE kind='slots' AND created>? AND CAST(amount AS REAL)>0", (since,)).fetchone()
+    return r["t"]
+
 @app.post("/slots/spin")
 def spin(game_name: str = Form(...), bet_amount: float = Form(...), u=Depends(user_from_token)):
-    cfg = {"cherry": (Decimal("2.0"), 0.47, ["🍒", "🍋", "🔔"]), "diamond": (Decimal("5.0"), 0.19, ["💎", "7️⃣", "⭐"])}.get(game_name)
+    cfg = SLOT_GAMES.get(game_name)
     if not cfg: raise HTTPException(400, "Unknown game")
+    st = slot_settings()
+    if not st["enabled"]: raise HTTPException(503, "Slots are temporarily unavailable")
+    cap = st["daily_payout_cap"]
+    if cap and paid_out_today() >= cap: raise HTTPException(503, "Slots are temporarily unavailable")
     mult, p, symbols = cfg
+    jp_mult = Decimal(str(st[game_name + "_jackpot_mult"])); jp_p = st[game_name + "_jackpot_chance"]
     bet = money(bet_amount)
-    won = rng.random() < p
-    results = [symbols[0]] * 3 if won else rng.sample(symbols, 3)
-    win = money(bet * mult) if won else Decimal("0.00")
+    top = max(mult, jp_mult)
+    if bet * top > Decimal(str(st["max_win_per_spin"])):
+        raise HTTPException(400, f"Max bet on this game is {money(Decimal(str(st['max_win_per_spin'])) / top)}")
+    scale = max(0.0, st["win_scale"])
+    roll = rng.random()
+    if roll < jp_p * scale:
+        results = [symbols[0]] * 3; win = money(bet * jp_mult); kind = "JACKPOT"
+    elif rng.random() < min(1.0, p * scale):
+        results = [symbols[0]] * 3; win = money(bet * mult); kind = "WIN"
+    else:
+        results = rng.sample(symbols, 3); win = Decimal("0.00"); kind = "LOSE"
     bal = settle(u["id"], bet, win, "slots")
-    return {"results": results, "win_amount": float(win), "balance": float(bal)}
+    return {"results": results, "win_amount": float(win), "result": kind, "balance": float(bal)}
 
 R = "23456789TJQKA"
 ORDER = ["royal", "sf", "quads", "fh", "flush", "straight", "trips", "twopair", "pair", "high"]
@@ -262,6 +290,30 @@ def admin_dash(a=Depends(admin_only)):
             "users": [{"username": r["username"], "balance": r["balance"]} for r in c.execute("SELECT username,balance FROM users ORDER BY id")],
             "deposits": [dict(r) for r in c.execute("SELECT d.id,u.username,d.amount FROM deposits d JOIN users u ON u.id=d.user_id WHERE d.status='pending'")],
             "withdrawals": [dict(r) for r in c.execute("SELECT w.id,u.username,w.amount,w.details,w.status FROM withdrawals w JOIN users u ON u.id=w.user_id WHERE w.status='pending'")]}
+
+
+class SlotCfg(BaseModel):
+    enabled: bool
+    win_scale: float = Field(ge=0.0, le=2.0)
+    max_win_per_spin: float = Field(gt=0, le=1_000_000)
+    daily_payout_cap: float = Field(ge=0, le=100_000_000)
+    cherry_jackpot_chance: float = Field(ge=0, le=0.1)
+    cherry_jackpot_mult: float = Field(ge=1, le=10000)
+    diamond_jackpot_chance: float = Field(ge=0, le=0.1)
+    diamond_jackpot_mult: float = Field(ge=1, le=10000)
+
+@app.get("/admin/slots")
+def get_slots(a=Depends(admin_only)):
+    return {**slot_settings(), "paid_out_24h": paid_out_today()}
+
+@app.post("/admin/slots")
+def set_slots(r: SlotCfg, a=Depends(admin_only)):
+    db().execute("INSERT OR REPLACE INTO settings(key,value) VALUES('slots',?)", (json.dumps(r.dict()),))
+    return {**slot_settings(), "paid_out_24h": paid_out_today()}
+
+@app.get("/slots/status")
+def slots_status():
+    return {"enabled": slot_settings()["enabled"]}
 
 class CreditReq(BaseModel):
     username: str
