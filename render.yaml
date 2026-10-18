@@ -1,0 +1,10 @@
+services:
+  - type: web
+    name: wormgpt-casino
+    runtime: docker
+    plan: free
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+      - key: ADMIN_USERNAME
+        value: bouzgie
