@@ -4,6 +4,7 @@ from decimal import Decimal, ROUND_DOWN
 import jwt
 from fastapi import FastAPI, Depends, HTTPException, Header, Request, Form
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 DB = os.environ.get("DB_PATH", "casino.db")
@@ -239,6 +240,8 @@ def admin_wd(wid: int, action: str, a=Depends(admin_only)):
     if action == "reject": change_balance(c, w["user_id"], money(w["amount"]), "withdraw_refund")
     c.execute("UPDATE withdrawals SET status=? WHERE id=?", ("paid" if action == "approve" else "rejected", wid))
     return {"ok": True}
+
+app.mount("/static", StaticFiles(directory="static"), name="static")
 
 @app.get("/")
 def home(): return FileResponse("index.html")
