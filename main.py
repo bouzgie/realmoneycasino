@@ -36,6 +36,7 @@ def init_db():
         balance TEXT DEFAULT '0.00', is_admin INTEGER DEFAULT 0, created REAL);
     CREATE TABLE IF NOT EXISTS ledger(id INTEGER PRIMARY KEY, user_id INTEGER, kind TEXT, amount TEXT, ref TEXT UNIQUE, created REAL);
     CREATE TABLE IF NOT EXISTS withdrawals(id INTEGER PRIMARY KEY, user_id INTEGER, amount TEXT, details TEXT, status TEXT DEFAULT 'pending', created REAL);
+    CREATE TABLE IF NOT EXISTS deposits(id INTEGER PRIMARY KEY, user_id INTEGER, amount TEXT, reference TEXT, status TEXT DEFAULT 'pending', created REAL);
     CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, event_name TEXT, league TEXT, odds_home REAL, odds_away REAL);
     """)
     if not c.execute("SELECT 1 FROM events").fetchone():
@@ -214,6 +215,44 @@ def withdraw(r: WdReq, u=Depends(user_from_token)):
     c.execute("INSERT INTO withdrawals(user_id,amount,details,created) VALUES(?,?,?,?)", (u["id"], str(amt), r.details, time.time()))
     return {"balance": float(bal), "status": "pending"}
 
+
+# ---------- payment provider plug-in ----------
+PROVIDER = os.environ.get("PAYMENT_PROVIDER", "manual")
+
+class PaymentProvider:
+    """Plug in a processor by subclassing and registering it in PROVIDERS.
+    create_checkout() returns {"url": hosted payment page, "ref": id}. When the processor confirms
+    payment it calls POST /payments/webhook (signed), which credits the balance."""
+    def create_checkout(self, username, amount): raise NotImplementedError
+
+class ManualProvider(PaymentProvider):
+    """Default: player pays you outside the app (bank transfer, etc.), admin confirms and credits."""
+    def create_checkout(self, username, amount):
+        return {"url": None, "ref": None, "instructions": os.environ.get("MANUAL_PAYMENT_INSTRUCTIONS", "Contact support for payment instructions.")}
+
+PROVIDERS = {"manual": ManualProvider()}
+
+class DepReq(BaseModel):
+    amount: float
+
+@app.post("/wallet/deposit")
+def deposit(r: DepReq, u=Depends(user_from_token)):
+    amt = money(r.amount)
+    if amt <= 0 or amt > 10000: raise HTTPException(400, "Invalid amount")
+    prov = PROVIDERS.get(PROVIDER)
+    if not prov: raise HTTPException(503, "Payments not configured")
+    out = prov.create_checkout(u["username"], amt)
+    c = db(); c.execute("INSERT INTO deposits(user_id,amount,reference,created) VALUES(?,?,?,?)", (u["id"], str(amt), out.get("ref"), time.time()))
+    return out
+
+@app.post("/admin/deposits/{did}/{action}")
+def admin_dep(did: int, action: str, a=Depends(admin_only)):
+    c = db(); d = c.execute("SELECT * FROM deposits WHERE id=? AND status='pending'", (did,)).fetchone()
+    if not d or action not in ("confirm", "reject"): raise HTTPException(400, "Bad request")
+    if action == "confirm": change_balance(c, d["user_id"], money(d["amount"]), "deposit", f"manualdep:{did}")
+    c.execute("UPDATE deposits SET status=? WHERE id=?", ("confirmed" if action == "confirm" else "rejected", did))
+    return {"ok": True}
+
 # ---------- admin ----------
 @app.get("/admin/dashboard")
 def admin_dash(a=Depends(admin_only)):
@@ -221,6 +260,7 @@ def admin_dash(a=Depends(admin_only)):
     return {"total_users": c.execute("SELECT COUNT(*) n FROM users").fetchone()["n"],
             "total_transactions": c.execute("SELECT COUNT(*) n FROM ledger").fetchone()["n"],
             "users": [{"username": r["username"], "balance": r["balance"]} for r in c.execute("SELECT username,balance FROM users ORDER BY id")],
+            "deposits": [dict(r) for r in c.execute("SELECT d.id,u.username,d.amount FROM deposits d JOIN users u ON u.id=d.user_id WHERE d.status='pending'")],
             "withdrawals": [dict(r) for r in c.execute("SELECT w.id,u.username,w.amount,w.details,w.status FROM withdrawals w JOIN users u ON u.id=w.user_id WHERE w.status='pending'")]}
 
 class CreditReq(BaseModel):

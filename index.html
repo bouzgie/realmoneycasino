@@ -92,7 +92,10 @@ button.action-btn:hover { filter: brightness(1.1); }
   <div id="wallet" class="section">
     <div class="game-card">
       <div class="game-title">💳 Wallet</div>
-      <p>Deposits: contact support to fund your account.</p>
+      <h4>Add funds</h4>
+      <input type="number" id="depAmount" placeholder="Amount" min="1">
+      <button class="action-btn" id="depBtn">DEPOSIT</button>
+      <p id="depInfo"></p>
       <h4>Request withdrawal</h4>
       <input type="number" id="wdAmount" placeholder="Amount" min="1">
       <input id="wdDetails" placeholder="Payout details (bank / PayPal email / etc.)">
@@ -109,6 +112,8 @@ button.action-btn:hover { filter: brightness(1.1); }
     <h3 style="margin-top:20px;">Credit a user</h3>
     <input id="crUser" placeholder="Username"><input type="number" id="crAmount" placeholder="Amount">
     <button class="action-btn" id="crBtn">ADD FUNDS</button>
+    <h3 style="margin-top:20px;">Pending deposits</h3>
+    <div id="adminDeposits"></div>
     <h3 style="margin-top:20px;">Pending withdrawals</h3>
     <div id="adminWithdrawals"></div>
     <h3 style="margin-top:20px;">User List</h3>
@@ -251,6 +256,18 @@ async function loadAdmin() {
       row.innerHTML = `<span>${esc(u.username)}</span><span>$${esc(u.balance)}</span>`;
       list.appendChild(row);
     });
+    const dl = $('adminDeposits'); dl.innerHTML = '';
+    if (!data.deposits.length) dl.textContent = 'None';
+    data.deposits.forEach(d => {
+      const row = document.createElement('div'); row.className = 'bet-row';
+      row.innerHTML = `<span>${esc(d.username)} $${esc(d.amount)}</span>`;
+      ['confirm', 'reject'].forEach(a => {
+        const b = document.createElement('button'); b.textContent = a; b.style.marginLeft = '6px';
+        b.onclick = async () => { try { await api(`/admin/deposits/${d.id}/${a}`, { method: 'POST', headers: auth() }); loadAdmin(); } catch (e) { alert(e.message); } };
+        row.appendChild(b);
+      });
+      dl.appendChild(row);
+    });
     const wl = $('adminWithdrawals'); wl.innerHTML = '';
     if (!data.withdrawals.length) wl.textContent = 'None';
     data.withdrawals.forEach(w => {
@@ -276,6 +293,15 @@ async function requestWithdrawal() {
   } catch (e) { alert(e.message); }
 }
 
+async function requestDeposit() {
+  const amount = parseFloat($('depAmount').value);
+  if (!(amount > 0)) return alert('Enter an amount');
+  try {
+    const d = await api('/wallet/deposit', { method: 'POST', headers: { ...auth(), 'Content-Type': 'application/json' }, body: JSON.stringify({ amount }) });
+    if (d.url) window.location.href = d.url; else $('depInfo').textContent = d.instructions;
+  } catch (e) { alert(e.message); }
+}
+
 async function adminCredit() {
   try {
     await api('/admin/credit', { method: 'POST', headers: { ...auth(), 'Content-Type': 'application/json' },
@@ -287,6 +313,7 @@ async function adminCredit() {
 document.querySelectorAll('[data-section]').forEach(el => el.addEventListener('click', () => showSection(el.dataset.section)));
 document.querySelectorAll('[data-slot]').forEach(el => el.addEventListener('click', () => playSlot(el.dataset.slot, parseFloat($(el.dataset.input).value))));
 $('pokerBtn').addEventListener('click', playPoker);
+$('depBtn').addEventListener('click', requestDeposit);
 $('wdBtn').addEventListener('click', requestWithdrawal);
 $('crBtn').addEventListener('click', adminCredit);
 $('logoutBtn').addEventListener('click', logout);
