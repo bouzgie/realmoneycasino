@@ -1,0 +1,22 @@
+services:
+  - type: web
+    name: realmoneycasino
+    runtime: docker
+    plan: starter
+    disk:
+      name: data
+      mountPath: /data
+      sizeGB: 1
+    envVars:
+      - key: JWT_SECRET
+        generateValue: true
+      - key: PAYMENT_WEBHOOK_SECRET
+        generateValue: true
+      - key: ADMIN_USERNAME
+        value: bouzgie
+      - key: ADMIN_PASSWORD
+        sync: false
+      - key: PAYMENT_PROVIDER
+        value: manual
+      - key: MANUAL_PAYMENT_INSTRUCTIONS
+        value: Contact support for payment instructions.
