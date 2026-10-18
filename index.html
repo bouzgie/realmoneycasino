@@ -50,6 +50,7 @@ button.action-btn:hover { filter: brightness(1.1); }
   <button class="nav-btn" data-section="slots">Slots</button>
   <button class="nav-btn" data-section="poker">Poker</button>
   <button class="nav-btn" data-section="sports">Sports</button>
+  <button class="nav-btn" data-section="wallet">Wallet</button>
   <button class="nav-btn" data-section="admin" id="adminBtn" style="margin-top:auto; display:none;">Admin</button>
   <button class="nav-btn" id="logoutBtn" style="color:#ef4444;">Logout</button>
 </div>
@@ -88,12 +89,28 @@ button.action-btn:hover { filter: brightness(1.1); }
 
   <div id="sports" class="section"><div class="card-grid" id="sportsList"></div></div>
 
+  <div id="wallet" class="section">
+    <div class="game-card">
+      <div class="game-title">💳 Wallet</div>
+      <p>Deposits: contact support to fund your account.</p>
+      <h4>Request withdrawal</h4>
+      <input type="number" id="wdAmount" placeholder="Amount" min="1">
+      <input id="wdDetails" placeholder="Payout details (bank / PayPal email / etc.)">
+      <button class="action-btn" id="wdBtn">REQUEST WITHDRAWAL</button>
+    </div>
+  </div>
+
   <div id="admin" class="section">
     <h3>Admin Dashboard</h3>
     <div class="card-grid">
       <div class="game-card"><div class="game-title">Total Users</div><div id="adminUserCount">0</div></div>
       <div class="game-card"><div class="game-title">Total Transactions</div><div id="adminRevenue">0</div></div>
     </div>
+    <h3 style="margin-top:20px;">Credit a user</h3>
+    <input id="crUser" placeholder="Username"><input type="number" id="crAmount" placeholder="Amount">
+    <button class="action-btn" id="crBtn">ADD FUNDS</button>
+    <h3 style="margin-top:20px;">Pending withdrawals</h3>
+    <div id="adminWithdrawals"></div>
     <h3 style="margin-top:20px;">User List</h3>
     <div id="adminUserList"></div>
   </div>
@@ -102,6 +119,7 @@ button.action-btn:hover { filter: brightness(1.1); }
 <script>
 let token = localStorage.getItem('token');
 let balance = 0;
+const API = window.API_BASE || ''; // set window.API_BASE if the backend is on another domain
 let registering = false;
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -111,7 +129,7 @@ const setBalance = b => { balance = Number(b); $('userBalance').textContent = ba
 function validBet(v) { return Number.isFinite(v) && v > 0 && v <= balance; }
 
 async function api(url, opts = {}) {
-  const res = await fetch(url, opts);
+  const res = await fetch(API + url, opts);
   if (res.status === 401) { logout(); throw new Error('Session expired'); }
   const data = await res.json().catch(() => ({}));
   if (!res.ok) throw new Error(data.detail || 'Request failed');
@@ -233,12 +251,44 @@ async function loadAdmin() {
       row.innerHTML = `<span>${esc(u.username)}</span><span>$${esc(u.balance)}</span>`;
       list.appendChild(row);
     });
+    const wl = $('adminWithdrawals'); wl.innerHTML = '';
+    if (!data.withdrawals.length) wl.textContent = 'None';
+    data.withdrawals.forEach(w => {
+      const row = document.createElement('div'); row.className = 'bet-row';
+      row.innerHTML = `<span>${esc(w.username)} $${esc(w.amount)} (${esc(w.details)})</span>`;
+      ['approve', 'reject'].forEach(a => {
+        const b = document.createElement('button'); b.textContent = a; b.style.marginLeft = '6px';
+        b.onclick = async () => { try { await api(`/admin/withdrawals/${w.id}/${a}`, { method: 'POST', headers: auth() }); loadAdmin(); } catch (e) { alert(e.message); } };
+        row.appendChild(b);
+      });
+      wl.appendChild(row);
+    });
+  } catch (e) { alert(e.message); }
+}
+
+async function requestWithdrawal() {
+  const amount = parseFloat($('wdAmount').value);
+  if (!validBet(amount)) return alert('Invalid amount or insufficient funds');
+  try {
+    const d = await api('/wallet/withdraw', { method: 'POST', headers: { ...auth(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ amount, details: $('wdDetails').value }) });
+    setBalance(d.balance); alert('Withdrawal requested. It is pending admin approval.');
+  } catch (e) { alert(e.message); }
+}
+
+async function adminCredit() {
+  try {
+    await api('/admin/credit', { method: 'POST', headers: { ...auth(), 'Content-Type': 'application/json' },
+      body: JSON.stringify({ username: $('crUser').value.trim(), amount: parseFloat($('crAmount').value) }) });
+    alert('Funds added'); loadAdmin();
   } catch (e) { alert(e.message); }
 }
 
 document.querySelectorAll('[data-section]').forEach(el => el.addEventListener('click', () => showSection(el.dataset.section)));
 document.querySelectorAll('[data-slot]').forEach(el => el.addEventListener('click', () => playSlot(el.dataset.slot, parseFloat($(el.dataset.input).value))));
 $('pokerBtn').addEventListener('click', playPoker);
+$('wdBtn').addEventListener('click', requestWithdrawal);
+$('crBtn').addEventListener('click', adminCredit);
 $('logoutBtn').addEventListener('click', logout);
 $('authSubmit').addEventListener('click', submitAuth);
 $('authToggle').addEventListener('click', () => { registering = !registering; renderAuth(); });
