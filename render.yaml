@@ -17,6 +17,12 @@ services:
       - key: ADMIN_PASSWORD
         sync: false
       - key: PAYMENT_PROVIDER
-        value: manual
+        value: stripe
+      - key: STRIPE_SECRET_KEY
+        sync: false
+      - key: STRIPE_WEBHOOK_SECRET
+        sync: false
+      - key: APP_URL
+        sync: false
       - key: MANUAL_PAYMENT_INSTRUCTIONS
         value: Contact support for payment instructions.

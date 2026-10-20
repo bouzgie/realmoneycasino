@@ -258,7 +258,39 @@ class ManualProvider(PaymentProvider):
     def create_checkout(self, username, amount):
         return {"url": None, "ref": None, "instructions": os.environ.get("MANUAL_PAYMENT_INSTRUCTIONS", "Contact support for payment instructions.")}
 
+class StripeProvider(PaymentProvider):
+    """Stripe Checkout. Needs STRIPE_SECRET_KEY, STRIPE_WEBHOOK_SECRET and APP_URL (your site's public URL)."""
+    def create_checkout(self, username, amount):
+        import stripe
+        stripe.api_key = os.environ["STRIPE_SECRET_KEY"]
+        base = os.environ.get("APP_URL", "").rstrip("/")
+        s = stripe.checkout.Session.create(
+            mode="payment",
+            line_items=[{"quantity": 1, "price_data": {"currency": "usd", "unit_amount": int(amount * 100),
+                         "product_data": {"name": "Casino deposit"}}}],
+            metadata={"username": username},
+            success_url=base + "/?deposit=success", cancel_url=base + "/?deposit=cancelled")
+        return {"url": s.url, "ref": s.id}
+
 PROVIDERS = {"manual": ManualProvider()}
+if os.environ.get("STRIPE_SECRET_KEY"): PROVIDERS["stripe"] = StripeProvider()
+
+@app.post("/payments/stripe-webhook")
+async def stripe_webhook(request: Request):
+    import stripe
+    body = await request.body()
+    try: stripe.Webhook.construct_event(body, request.headers.get("stripe-signature", ""), os.environ.get("STRIPE_WEBHOOK_SECRET", ""))
+    except Exception: raise HTTPException(400, "Bad signature")
+    ev = json.loads(body)  # signature verified above
+    if ev["type"] == "checkout.session.completed" and ev["data"]["object"].get("payment_status") == "paid":
+        o = ev["data"]["object"]
+        c = db(); u = c.execute("SELECT id FROM users WHERE username=?", (o["metadata"]["username"],)).fetchone()
+        if u:
+            try:
+                change_balance(c, u["id"], money(Decimal(o["amount_total"]) / 100), "deposit", "stripe:" + o["id"])
+                c.execute("UPDATE deposits SET status='confirmed' WHERE reference=?", (o["id"],))
+            except sqlite3.IntegrityError: pass  # already credited
+    return {"ok": True}
 
 class DepReq(BaseModel):
     amount: float
