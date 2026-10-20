@@ -15,7 +15,7 @@ services:
       - key: ADMIN_USERNAME
         value: bouzgie
       - key: ADMIN_PASSWORD
-        sync: WHITETRASH23$$
+        sync: false
       - key: PAYMENT_PROVIDER
         value: stripe
       - key: STRIPE_SECRET_KEY
