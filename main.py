@@ -19,7 +19,10 @@ def db():
     c.row_factory = sqlite3.Row
     return c
 
-def money(x): return Decimal(str(x)).quantize(Decimal("0.01"), rounding=ROUND_DOWN)
+def money(x):
+    d = Decimal(str(x))
+    if not d.is_finite(): raise HTTPException(400, "Invalid amount")
+    return d.quantize(Decimal("0.01"), rounding=ROUND_DOWN)
 
 def hash_pw(pw, salt=None):
     salt = salt or secrets.token_hex(16)
@@ -37,13 +40,24 @@ def init_db():
     CREATE TABLE IF NOT EXISTS ledger(id INTEGER PRIMARY KEY, user_id INTEGER, kind TEXT, amount TEXT, ref TEXT UNIQUE, created REAL);
     CREATE TABLE IF NOT EXISTS withdrawals(id INTEGER PRIMARY KEY, user_id INTEGER, amount TEXT, details TEXT, status TEXT DEFAULT 'pending', created REAL);
     CREATE TABLE IF NOT EXISTS deposits(id INTEGER PRIMARY KEY, user_id INTEGER, amount TEXT, reference TEXT, status TEXT DEFAULT 'pending', created REAL);
+    CREATE TABLE IF NOT EXISTS pi_map(pi TEXT PRIMARY KEY, user_id INTEGER);
     CREATE TABLE IF NOT EXISTS settings(key TEXT PRIMARY KEY, value TEXT);
     CREATE TABLE IF NOT EXISTS events(id INTEGER PRIMARY KEY, event_name TEXT, league TEXT, odds_home REAL, odds_away REAL);
     """)
+    try: c.execute("ALTER TABLE users ADD COLUMN frozen INTEGER DEFAULT 0")
+    except sqlite3.OperationalError: pass
     if not c.execute("SELECT 1 FROM events").fetchone():
         c.executemany("INSERT INTO events(event_name,league,odds_home,odds_away) VALUES(?,?,?,?)",
             [("Lakers vs Celtics", "NBA", 2.0, 1.8), ("Arsenal vs Chelsea", "EPL", 2.2, 3.1), ("Yankees vs Red Sox", "MLB", 1.9, 2.0)])
     admin_user = os.environ.get("ADMIN_USERNAME", "admin")
+    env_pw = os.environ.get("ADMIN_PASSWORD")
+    if env_pw and c.execute("SELECT 1 FROM users WHERE is_admin=1").fetchone():
+        # keep the admin password in sync with the env var so it can be rotated from the Render dashboard
+        row = c.execute("SELECT id,username,pw FROM users WHERE is_admin=1 ORDER BY id LIMIT 1").fetchone()
+        if not check_pw(env_pw, row["pw"]):
+            c.execute("UPDATE users SET pw=? WHERE id=?", (hash_pw(env_pw), row["id"]))
+        if row["username"] != admin_user and not c.execute("SELECT 1 FROM users WHERE username=?", (admin_user,)).fetchone():
+            c.execute("UPDATE users SET username=? WHERE id=?", (admin_user, row["id"]))
     if not c.execute("SELECT 1 FROM users WHERE is_admin=1").fetchone():
         pw = os.environ.get("ADMIN_PASSWORD") or secrets.token_urlsafe(14)
         c.execute("INSERT INTO users(username,email,pw,is_admin,created) VALUES(?,?,?,1,?)",
@@ -54,7 +68,7 @@ init_db()
 
 def user_from_token(authorization: str = Header(None)):
     if not authorization or not authorization.startswith("Bearer "): raise HTTPException(401, "Not logged in")
-    try: uid = jwt.decode(authorization[7:], SECRET, algorithms=["HS256"])["uid"]
+    try: uid = jwt.decode(authorization[7:], SECRET, algorithms=["HS256"], options={"require": ["exp"]})["uid"]
     except Exception: raise HTTPException(401, "Session expired")
     u = db().execute("SELECT * FROM users WHERE id=?", (uid,)).fetchone()
     if not u: raise HTTPException(401, "Unknown user")
@@ -64,13 +78,13 @@ def admin_only(u=Depends(user_from_token)):
     if not u["is_admin"]: raise HTTPException(403, "Admin only")
     return u
 
-def change_balance(c, uid, delta, kind, ref=None):
+def change_balance(c, uid, delta, kind, ref=None, allow_negative=False):
     """Atomic balance update. Raises on overdraft."""
     c.execute("BEGIN IMMEDIATE")
     try:
         bal = money(c.execute("SELECT balance FROM users WHERE id=?", (uid,)).fetchone()["balance"])
         new = bal + delta
-        if new < 0: raise HTTPException(400, "Insufficient funds")
+        if new < 0 and not allow_negative: raise HTTPException(400, "Insufficient funds")
         c.execute("UPDATE users SET balance=? WHERE id=?", (str(new), uid))
         c.execute("INSERT INTO ledger(user_id,kind,amount,ref,created) VALUES(?,?,?,?,?)", (uid, kind, str(delta), ref, time.time()))
         c.execute("COMMIT")
@@ -85,7 +99,9 @@ def settle(uid, bet, payout, kind):
     c = db()
     c.execute("BEGIN IMMEDIATE")
     try:
-        bal = money(c.execute("SELECT balance FROM users WHERE id=?", (uid,)).fetchone()["balance"])
+        row = c.execute("SELECT balance,frozen FROM users WHERE id=?", (uid,)).fetchone()
+        if row["frozen"]: raise HTTPException(403, "Account frozen, contact support")
+        bal = money(row["balance"])
         if bal < bet: raise HTTPException(400, "Insufficient funds")
         new = bal - bet + payout
         c.execute("UPDATE users SET balance=? WHERE id=?", (str(new), uid))
@@ -102,21 +118,31 @@ class Reg(BaseModel):
     password: str = Field(min_length=8, max_length=100)
 
 @app.post("/register")
-def register(r: Reg):
+def register(r: Reg, request: Request):
+    now = time.time(); ip = request.client.host
+    reg_attempts[ip] = [t for t in reg_attempts.get(ip, []) if now - t < 3600]
+    if len(reg_attempts[ip]) >= 5: raise HTTPException(429, "Too many signups from this address, try later")
+    reg_attempts[ip].append(now)
+    if len(reg_attempts) > 10000: reg_attempts.clear()
     try:
         db().execute("INSERT INTO users(username,email,pw,created) VALUES(?,?,?,?)", (r.username, r.email, hash_pw(r.password), time.time()))
     except sqlite3.IntegrityError: raise HTTPException(400, "Username taken")
     return {"ok": True}
 
 attempts = {}
+DUMMY_PW = hash_pw("dummy-password")
+reg_attempts = {}
 @app.post("/token")
 def token(request: Request, username: str = Form(...), password: str = Form(...)):
     key = (request.client.host, username); now = time.time()
     attempts[key] = [t for t in attempts.get(key, []) if now - t < 300]
     if len(attempts[key]) >= 5: raise HTTPException(429, "Too many attempts, wait 5 minutes")
+    if len(attempts) > 10000: attempts.clear()
     u = db().execute("SELECT * FROM users WHERE username=?", (username,)).fetchone()
+    if not u: check_pw(password, DUMMY_PW)  # same timing whether or not the user exists
     if not u or not check_pw(password, u["pw"]):
         attempts[key].append(now); raise HTTPException(401, "Wrong username or password")
+    attempts.pop(key, None)
     return {"access_token": jwt.encode({"uid": u["id"], "exp": now + 8 * 3600}, SECRET, algorithm="HS256"), "balance": float(u["balance"])}
 
 @app.get("/profile")
@@ -239,9 +265,20 @@ class WdReq(BaseModel):
 def withdraw(r: WdReq, u=Depends(user_from_token)):
     amt = money(r.amount)
     if amt <= 0: raise HTTPException(400, "Invalid amount")
-    c = db(); bal = change_balance(c, u["id"], -amt, "withdraw_hold")
-    c.execute("INSERT INTO withdrawals(user_id,amount,details,created) VALUES(?,?,?,?)", (u["id"], str(amt), r.details, time.time()))
-    return {"balance": float(bal), "status": "pending"}
+    c = db(); c.execute("BEGIN IMMEDIATE")
+    try:
+        row = c.execute("SELECT balance,frozen FROM users WHERE id=?", (u["id"],)).fetchone()
+        if row["frozen"]: raise HTTPException(403, "Account frozen, contact support")
+        bal = money(row["balance"])
+        if bal < amt: raise HTTPException(400, "Insufficient funds")
+        new = bal - amt
+        c.execute("UPDATE users SET balance=? WHERE id=?", (str(new), u["id"]))
+        c.execute("INSERT INTO ledger(user_id,kind,amount,created) VALUES(?,?,?,?)", (u["id"], "withdraw_hold", str(-amt), time.time()))
+        c.execute("INSERT INTO withdrawals(user_id,amount,details,created) VALUES(?,?,?,?)", (u["id"], str(amt), r.details, time.time()))
+        c.execute("COMMIT")
+    except Exception:
+        c.execute("ROLLBACK"); raise
+    return {"balance": float(new), "status": "pending"}
 
 
 # ---------- payment provider plug-in ----------
@@ -268,7 +305,7 @@ class StripeProvider(PaymentProvider):
             mode="payment",
             line_items=[{"quantity": 1, "price_data": {"currency": "usd", "unit_amount": int(amount * 100),
                          "product_data": {"name": "Casino deposit"}}}],
-            metadata={"username": username},
+            metadata={"username": username}, payment_intent_data={"metadata": {"username": username}},
             success_url=base + "/?deposit=success", cancel_url=base + "/?deposit=cancelled")
         return {"url": s.url, "ref": s.id}
 
@@ -278,18 +315,29 @@ if os.environ.get("STRIPE_SECRET_KEY"): PROVIDERS["stripe"] = StripeProvider()
 @app.post("/payments/stripe-webhook")
 async def stripe_webhook(request: Request):
     import stripe
+    if not os.environ.get("STRIPE_WEBHOOK_SECRET"): raise HTTPException(503, "Stripe webhook not configured")
     body = await request.body()
     try: stripe.Webhook.construct_event(body, request.headers.get("stripe-signature", ""), os.environ.get("STRIPE_WEBHOOK_SECRET", ""))
     except Exception: raise HTTPException(400, "Bad signature")
     ev = json.loads(body)  # signature verified above
-    if ev["type"] == "checkout.session.completed" and ev["data"]["object"].get("payment_status") == "paid":
-        o = ev["data"]["object"]
-        c = db(); u = c.execute("SELECT id FROM users WHERE username=?", (o["metadata"]["username"],)).fetchone()
+    o = ev["data"]["object"]; t = ev["type"]; c = db()
+    if t in ("checkout.session.completed", "checkout.session.async_payment_succeeded") and o.get("payment_status") == "paid":
+        u = c.execute("SELECT id FROM users WHERE username=?", (o["metadata"]["username"],)).fetchone()
         if u:
             try:
                 change_balance(c, u["id"], money(Decimal(o["amount_total"]) / 100), "deposit", "stripe:" + o["id"])
                 c.execute("UPDATE deposits SET status='confirmed' WHERE reference=?", (o["id"],))
             except sqlite3.IntegrityError: pass  # already credited
+            if o.get("payment_intent"):
+                c.execute("INSERT OR REPLACE INTO pi_map(pi,user_id) VALUES(?,?)", (o["payment_intent"], u["id"]))
+    elif t in ("charge.refunded", "charge.dispute.created"):
+        pi = o.get("payment_intent"); m = c.execute("SELECT user_id FROM pi_map WHERE pi=?", (pi,)).fetchone() if pi else None
+        if m:
+            if t == "charge.refunded": amt, ref = money(Decimal(o["amount_refunded"]) / 100), f"refund:{o['id']}:{o['amount_refunded']}"
+            else: amt, ref = money(Decimal(o["amount"]) / 100), f"dispute:{o['id']}"
+            c.execute("UPDATE users SET frozen=1 WHERE id=?", (m["user_id"],))
+            try: change_balance(c, m["user_id"], -amt, t.replace("charge.", "stripe_"), ref, allow_negative=True)
+            except sqlite3.IntegrityError: pass
     return {"ok": True}
 
 class DepReq(BaseModel):
@@ -302,12 +350,13 @@ def deposit(r: DepReq, u=Depends(user_from_token)):
     prov = PROVIDERS.get(PROVIDER)
     if not prov: raise HTTPException(503, "Payments not configured")
     out = prov.create_checkout(u["username"], amt)
-    c = db(); c.execute("INSERT INTO deposits(user_id,amount,reference,created) VALUES(?,?,?,?)", (u["id"], str(amt), out.get("ref"), time.time()))
+    if PROVIDER == "manual":
+        db().execute("INSERT INTO deposits(user_id,amount,reference,created) VALUES(?,?,?,?)", (u["id"], str(amt), None, time.time()))
     return out
 
 @app.post("/admin/deposits/{did}/{action}")
 def admin_dep(did: int, action: str, a=Depends(admin_only)):
-    c = db(); d = c.execute("SELECT * FROM deposits WHERE id=? AND status='pending'", (did,)).fetchone()
+    c = db(); d = c.execute("SELECT * FROM deposits WHERE id=? AND status='pending' AND reference IS NULL", (did,)).fetchone()
     if not d or action not in ("confirm", "reject"): raise HTTPException(400, "Bad request")
     if action == "confirm": change_balance(c, d["user_id"], money(d["amount"]), "deposit", f"manualdep:{did}")
     c.execute("UPDATE deposits SET status=? WHERE id=?", ("confirmed" if action == "confirm" else "rejected", did))
@@ -320,13 +369,13 @@ def admin_dash(a=Depends(admin_only)):
     return {"total_users": c.execute("SELECT COUNT(*) n FROM users").fetchone()["n"],
             "total_transactions": c.execute("SELECT COUNT(*) n FROM ledger").fetchone()["n"],
             "users": [{"username": r["username"], "balance": r["balance"]} for r in c.execute("SELECT username,balance FROM users ORDER BY id")],
-            "deposits": [dict(r) for r in c.execute("SELECT d.id,u.username,d.amount FROM deposits d JOIN users u ON u.id=d.user_id WHERE d.status='pending'")],
+            "deposits": [dict(r) for r in c.execute("SELECT d.id,u.username,d.amount FROM deposits d JOIN users u ON u.id=d.user_id WHERE d.status='pending' AND d.reference IS NULL")],
             "withdrawals": [dict(r) for r in c.execute("SELECT w.id,u.username,w.amount,w.details,w.status FROM withdrawals w JOIN users u ON u.id=w.user_id WHERE w.status='pending'")]}
 
 
 class SlotCfg(BaseModel):
     enabled: bool
-    win_scale: float = Field(ge=0.0, le=2.0)
+    win_scale: float = Field(ge=0.0, le=1.0)
     max_win_per_spin: float = Field(gt=0, le=1_000_000)
     daily_payout_cap: float = Field(ge=0, le=100_000_000)
     cherry_jackpot_chance: float = Field(ge=0, le=0.1)
@@ -359,10 +408,19 @@ def admin_credit(r: CreditReq, a=Depends(admin_only)):
 
 @app.post("/admin/withdrawals/{wid}/{action}")
 def admin_wd(wid: int, action: str, a=Depends(admin_only)):
-    c = db(); w = c.execute("SELECT * FROM withdrawals WHERE id=? AND status='pending'", (wid,)).fetchone()
-    if not w or action not in ("approve", "reject"): raise HTTPException(400, "Bad request")
-    if action == "reject": change_balance(c, w["user_id"], money(w["amount"]), "withdraw_refund")
-    c.execute("UPDATE withdrawals SET status=? WHERE id=?", ("paid" if action == "approve" else "rejected", wid))
+    if action not in ("approve", "reject"): raise HTTPException(400, "Bad request")
+    c = db(); c.execute("BEGIN IMMEDIATE")
+    try:
+        w = c.execute("SELECT * FROM withdrawals WHERE id=? AND status='pending'", (wid,)).fetchone()
+        if not w: raise HTTPException(400, "Already processed or not found")
+        c.execute("UPDATE withdrawals SET status=? WHERE id=?", ("paid" if action == "approve" else "rejected", wid))
+        if action == "reject":
+            bal = money(c.execute("SELECT balance FROM users WHERE id=?", (w["user_id"],)).fetchone()["balance"])
+            c.execute("UPDATE users SET balance=? WHERE id=?", (str(bal + money(w["amount"])), w["user_id"]))
+            c.execute("INSERT INTO ledger(user_id,kind,amount,ref,created) VALUES(?,?,?,?,?)", (w["user_id"], "withdraw_refund", w["amount"], f"wdrefund:{wid}", time.time()))
+        c.execute("COMMIT")
+    except Exception:
+        c.execute("ROLLBACK"); raise
     return {"ok": True}
 
 app.mount("/static", StaticFiles(directory="static"), name="static")
