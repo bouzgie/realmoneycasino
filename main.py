@@ -309,7 +309,49 @@ class StripeProvider(PaymentProvider):
             success_url=base + "/?deposit=success", cancel_url=base + "/?deposit=cancelled")
         return {"url": s.url, "ref": s.id}
 
+class NowPaymentsProvider(PaymentProvider):
+    """NOWPayments crypto invoice. Needs NOWPAYMENTS_API_KEY, NOWPAYMENTS_IPN_SECRET and APP_URL."""
+    def create_checkout(self, username, amount):
+        import urllib.request
+        base = os.environ.get("APP_URL", "").rstrip("/")
+        order_id = "np_" + secrets.token_hex(12)
+        body = json.dumps({"price_amount": float(amount), "price_currency": "usd", "order_id": order_id,
+                           "order_description": "Casino deposit", "ipn_callback_url": base + "/payments/nowpayments-webhook",
+                           "success_url": base + "/?deposit=success", "cancel_url": base + "/?deposit=cancelled"}).encode()
+        req = urllib.request.Request("https://api.nowpayments.io/v1/invoice", data=body, method="POST",
+                                     headers={"x-api-key": os.environ["NOWPAYMENTS_API_KEY"], "Content-Type": "application/json"})
+        try:
+            with urllib.request.urlopen(req, timeout=20) as r: inv = json.loads(r.read())
+        except Exception: raise HTTPException(502, "Payment provider unavailable, try again")
+        return {"url": inv["invoice_url"], "ref": order_id}
+
 PROVIDERS = {"manual": ManualProvider()}
+if os.environ.get("NOWPAYMENTS_API_KEY"): PROVIDERS["nowpayments"] = NowPaymentsProvider()
+
+def _sorted(o):
+    return {k: _sorted(o[k]) for k in sorted(o)} if isinstance(o, dict) else ([_sorted(x) for x in o] if isinstance(o, list) else o)
+
+@app.post("/payments/nowpayments-webhook")
+async def nowpayments_webhook(request: Request):
+    secret = os.environ.get("NOWPAYMENTS_IPN_SECRET", "")
+    if not secret: raise HTTPException(503, "NOWPayments webhook not configured")
+    ev = json.loads(await request.body())
+    canon = json.dumps(_sorted(ev), separators=(",", ":"), ensure_ascii=False)
+    good = hmac.new(secret.encode(), canon.encode(), hashlib.sha512).hexdigest()
+    if not hmac.compare_digest(good, request.headers.get("x-nowpayments-sig", "")): raise HTTPException(400, "Bad signature")
+    c = db(); d = c.execute("SELECT * FROM deposits WHERE reference=?", (ev.get("order_id"),)).fetchone()
+    if not d: return {"ok": True}
+    st = ev.get("payment_status")
+    if st == "finished" and d["status"] == "pending":
+        # credit the amount WE recorded when the invoice was created, never an amount from the callback
+        if money(ev.get("price_amount", 0)) != money(d["amount"]): raise HTTPException(400, "Amount mismatch")
+        try:
+            change_balance(c, d["user_id"], money(d["amount"]), "deposit", "np:" + d["reference"])
+            c.execute("UPDATE deposits SET status='confirmed' WHERE id=?", (d["id"],))
+        except sqlite3.IntegrityError: pass
+    elif st in ("failed", "expired") and d["status"] == "pending":
+        c.execute("UPDATE deposits SET status='rejected' WHERE id=?", (d["id"],))
+    return {"ok": True}
 if os.environ.get("STRIPE_SECRET_KEY"): PROVIDERS["stripe"] = StripeProvider()
 
 @app.post("/payments/stripe-webhook")
@@ -350,8 +392,8 @@ def deposit(r: DepReq, u=Depends(user_from_token)):
     prov = PROVIDERS.get(PROVIDER)
     if not prov: raise HTTPException(503, "Payments not configured")
     out = prov.create_checkout(u["username"], amt)
-    if PROVIDER == "manual":
-        db().execute("INSERT INTO deposits(user_id,amount,reference,created) VALUES(?,?,?,?)", (u["id"], str(amt), None, time.time()))
+    if PROVIDER in ("manual", "nowpayments"):
+        db().execute("INSERT INTO deposits(user_id,amount,reference,created) VALUES(?,?,?,?)", (u["id"], str(amt), out.get("ref"), time.time()))
     return out
 
 @app.post("/admin/deposits/{did}/{action}")

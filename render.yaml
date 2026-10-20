@@ -17,7 +17,11 @@ services:
       - key: ADMIN_PASSWORD
         sync: false
       - key: PAYMENT_PROVIDER
-        value: stripe
+        value: nowpayments
+      - key: NOWPAYMENTS_API_KEY
+        sync: false
+      - key: NOWPAYMENTS_IPN_SECRET
+        sync: false
       - key: STRIPE_SECRET_KEY
         sync: false
       - key: STRIPE_WEBHOOK_SECRET
