@@ -31,6 +31,37 @@ button.action-btn:hover { filter: brightness(1.1); }
 #authScreen { position: fixed; inset: 0; background: var(--bg); display: none; align-items: center; justify-content: center; z-index: 10; }
 #authScreen .game-card { width: 340px; }
 .link { color: var(--accent); cursor: pointer; font-size: 14px; }
+.nav { display: flex; flex-direction: column; flex: 1; }
+#menuBtn { display: none; background: none; border: 1px solid #475569; color: var(--text); font-size: 22px; border-radius: 8px; padding: 4px 12px; cursor: pointer; }
+.hint { font-size: 12px; color: #94a3b8; text-align: left; margin: -8px 0 12px; }
+.paytable { width: 100%; border-collapse: collapse; margin: 15px 0; font-size: 14px; }
+.paytable th, .paytable td { padding: 6px 10px; border-bottom: 1px solid #475569; text-align: left; }
+.paytable td:last-child, .paytable th:last-child { text-align: right; }
+.paytable tr.hit td { background: rgba(245,158,11,0.25); font-weight: bold; }
+#pokerResult { margin-top: 20px; }
+.cards { display: flex; flex-wrap: wrap; gap: 6px; justify-content: center; margin: 12px 0; }
+.pcard { background: #fff; color: #111; border-radius: 6px; width: 46px; padding: 8px 0; font-size: 20px; font-weight: bold; line-height: 1.1; box-shadow: 0 2px 4px rgba(0,0,0,0.4); }
+.pcard.red { color: #dc2626; }
+.pcard small { display: block; font-size: 22px; font-weight: normal; }
+.banner { padding: 14px; border-radius: 10px; font-size: 20px; font-weight: bold; margin-bottom: 10px; }
+.banner.win { background: #166534; color: #bbf7d0; }
+.banner.lose { background: #7f1d1d; color: #fecaca; }
+.banner.push { background: #475569; color: #f1f5f9; }
+@media (max-width: 768px) {
+  body { flex-direction: column; height: 100vh; }
+  .sidebar { width: 100%; box-sizing: border-box; padding: 10px 16px; flex-direction: row; flex-wrap: wrap; align-items: center; justify-content: space-between; box-shadow: 0 2px 10px rgba(0,0,0,0.3); }
+  .logo { margin: 0; font-size: 18px; }
+  #menuBtn { display: block; }
+  .nav { display: none; flex: 0 0 100%; padding-top: 10px; }
+  .nav.open { display: flex; }
+  .nav .nav-btn[style*="margin-top:auto"] { margin-top: 0 !important; }
+  .main-content { padding: 16px; }
+  .header { margin-bottom: 20px; padding-bottom: 12px; gap: 10px; flex-wrap: wrap; }
+  .header h2 { margin: 0; }
+  .balance-card { padding: 8px 16px; font-size: 16px; }
+  #authScreen .game-card { width: 90vw; max-width: 340px; box-sizing: border-box; }
+  .card-grid { grid-template-columns: 1fr; }
+}
 </style>
 </head>
 <body>
@@ -39,6 +70,7 @@ button.action-btn:hover { filter: brightness(1.1); }
     <div class="game-title" id="authTitle">Login</div>
     <input id="authUser" placeholder="Username" autocomplete="username">
     <input id="authPass" type="password" placeholder="Password" autocomplete="current-password">
+    <div class="hint" id="authRules" style="display:none">Username: 3 to 30 letters, numbers or underscores.<br>Password: at least 8 characters, with a letter and a number.</div>
     <button class="action-btn" id="authSubmit">Login</button>
     <p class="link" id="authToggle">No account? Register</p>
   </div>
@@ -46,6 +78,8 @@ button.action-btn:hover { filter: brightness(1.1); }
 
 <div class="sidebar">
   <div class="logo">RealMoneyCasino 💰</div>
+  <button id="menuBtn" aria-label="Menu" aria-expanded="false">☰</button>
+  <div class="nav" id="nav">
   <button class="nav-btn active" data-section="dashboard">Dashboard</button>
   <button class="nav-btn" data-section="slots">Slots</button>
   <button class="nav-btn" data-section="poker">Poker</button>
@@ -53,6 +87,7 @@ button.action-btn:hover { filter: brightness(1.1); }
   <button class="nav-btn" data-section="wallet">Wallet</button>
   <button class="nav-btn" data-section="admin" id="adminBtn" style="margin-top:auto; display:none;">Admin</button>
   <button class="nav-btn" id="logoutBtn" style="color:#ef4444;">Logout</button>
+  </div>
 </div>
 
 <div class="main-content">
@@ -65,6 +100,8 @@ button.action-btn:hover { filter: brightness(1.1); }
     <div class="card-grid">
       <div class="game-card clickable" data-section="slots"><div class="game-title">🎰 Slot Machines</div><p>Classic reels with high payouts</p></div>
       <div class="game-card clickable" data-section="sports"><div class="game-title">⚽ Sports Betting</div><p>Win big on global events</p></div>
+      <div class="game-card clickable" data-section="poker"><div class="game-title">🃏 Poker</div><p>Casino Hold'em, dealt by the server</p></div>
+      <div class="game-card clickable" data-section="wallet"><div class="game-title">💳 Wallet</div><p>Deposit funds or request a withdrawal</p></div>
     </div>
   </div>
 
@@ -82,6 +119,7 @@ button.action-btn:hover { filter: brightness(1.1); }
       <div class="game-title">🃏 Casino Hold'em</div>
       <p>The server deals your cards.</p>
       <input type="number" id="pokerBet" value="20" min="1">
+      <table class="paytable" id="payTable"></table>
       <button class="action-btn" id="pokerBtn">DEAL</button>
       <div id="pokerResult"></div>
     </div>
@@ -150,16 +188,34 @@ function validBet(v) { return Number.isFinite(v) && v > 0 && v <= balance; }
 
 async function api(url, opts = {}) {
   const res = await fetch(API + url, opts);
-  if (res.status === 401) { logout(); throw new Error('Session expired'); }
   const data = await res.json().catch(() => ({}));
-  if (!res.ok) throw new Error(data.detail || 'Request failed');
+  // A 401 from /token is just a wrong password: show the server message, don't log out.
+  if (res.status === 401 && url !== '/token') { logout(); throw new Error('Session expired'); }
+  if (!res.ok) throw new Error(errText(data.detail) || 'Request failed');
   return data;
+}
+
+// FastAPI sends detail as a string, or as an array of {loc, msg} for validation errors.
+function errText(detail) {
+  if (!detail) return '';
+  if (typeof detail === 'string') return detail;
+  if (Array.isArray(detail)) return detail.map(d => {
+    const field = Array.isArray(d.loc) ? d.loc.filter(x => x !== 'body').join(' ') : '';
+    const n = d.ctx || {};
+    const msg = d.type === 'string_too_short' ? `must be at least ${n.min_length} characters`
+      : d.type === 'string_too_long' ? `must be at most ${n.max_length} characters`
+      : d.type === 'string_pattern_mismatch' ? 'may only contain letters, numbers and underscores'
+      : String(d.msg || 'Invalid value').replace(/^Value error, /, '');
+    return field && !msg.toLowerCase().startsWith(field.toLowerCase()) ? `${field}: ${msg}` : msg;
+  }).join('\n');
+  return typeof detail.msg === 'string' ? detail.msg : 'Request failed';
 }
 
 function showAuth(show) { $('authScreen').style.display = show ? 'flex' : 'none'; }
 function renderAuth() {
   $('authTitle').textContent = registering ? 'Register' : 'Login';
   $('authSubmit').textContent = registering ? 'Register' : 'Login';
+  $('authRules').style.display = registering ? 'block' : 'none';
   $('authToggle').textContent = registering ? 'Have an account? Login' : 'No account? Register';
 }
 
@@ -182,6 +238,10 @@ async function submitAuth() {
 function logout() {
   localStorage.removeItem('token'); token = null;
   $('adminBtn').style.display = 'none';
+  setBalance(0);
+  showSection('dashboard');  // also resets the page title
+  $('pokerResult').innerHTML = '';
+  $('authPass').value = '';
   showAuth(true);
 }
 
@@ -200,6 +260,7 @@ function showSection(id) {
   $(id).classList.add('active');
   document.querySelectorAll('.nav-btn[data-section]').forEach(b => b.classList.toggle('active', b.dataset.section === id));
   $('pageTitle').textContent = id.charAt(0).toUpperCase() + id.slice(1);
+  $('nav').classList.remove('open'); $('menuBtn').setAttribute('aria-expanded', 'false');
   if (id === 'sports') loadSports();
   if (id === 'admin') { loadAdmin(); loadSlotCfg().catch(() => {}); }
 }
@@ -215,6 +276,25 @@ async function playSlot(game, bet) {
   } catch (e) { alert(e.message); }
 }
 
+// Mirrors PAY in main.py (total returned per $1 bet, stake included). Display only.
+const POKER_PAYS = [['Royal Flush', 100], ['Straight Flush', 50], ['Four of a Kind', 20], ['Full House', 7], ['Flush', 5],
+  ['Straight', 4], ['Three of a Kind', 3], ['Two Pair', 1], ['Pair', 0], ['High Card', 0]];
+function renderPayTable(hit) {
+  $('payTable').innerHTML = '<tr><th>Hand</th><th>Returns</th></tr>' + POKER_PAYS.map(([n, m]) =>
+    `<tr class="${n === hit ? 'hit' : ''}"><td>${n}</td><td>${m > 1 ? m + 'x bet' : m === 1 ? 'Push (bet back)' : 'Lose'}</td></tr>`).join('');
+}
+const SUITS = { H: '♥', D: '♦', C: '♣', S: '♠' };
+function cardHtml(c) {
+  const r = c[0] === 'T' ? '10' : c[0];
+  return `<div class="pcard ${c[1] === 'H' || c[1] === 'D' ? 'red' : ''}">${esc(r)}<small>${SUITS[c[1]] || ''}</small></div>`;
+}
+function showPokerResult(d, bet) {
+  const st = String(d.status).toLowerCase();
+  const text = st === 'win' ? `YOU WIN +$${(Number(d.winnings) - Number(bet)).toFixed(2)}` : st === 'push' ? `PUSH: bet returned ($${Number(d.winnings).toFixed(2)})` : `YOU LOSE $${Number(bet).toFixed(2)}`;
+  $('pokerResult').innerHTML = `<div class="banner ${st}">${text}</div><div>${esc(d.hand_name)}</div><div class="cards">${(d.cards || []).map(cardHtml).join('')}</div>`;
+  renderPayTable(d.hand_name);
+}
+
 async function playPoker() {
   const bet = parseFloat($('pokerBet').value);
   if (!validBet(bet)) return alert('Invalid bet or insufficient funds');
@@ -224,7 +304,7 @@ async function playPoker() {
       headers: { ...auth(), 'Content-Type': 'application/json' },
       body: JSON.stringify({ amount: bet }) });
     setBalance(data.balance);
-    $('pokerResult').textContent = `Cards: ${(data.cards || []).join(', ')} | ${data.hand_name} | ${data.status} | Won: $${data.winnings}`;
+    showPokerResult(data, bet);
   } catch (e) { alert(e.message); }
 }
 
@@ -320,9 +400,11 @@ async function saveSlotCfg() {
 async function requestWithdrawal() {
   const amount = parseFloat($('wdAmount').value);
   if (!validBet(amount)) return alert('Invalid amount or insufficient funds');
+  const details = $('wdDetails').value.trim();
+  if (!details) return alert('Enter your payout details (bank, PayPal email, etc.)');
   try {
     const d = await api('/wallet/withdraw', { method: 'POST', headers: { ...auth(), 'Content-Type': 'application/json' },
-      body: JSON.stringify({ amount, details: $('wdDetails').value }) });
+      body: JSON.stringify({ amount, details }) });
     setBalance(d.balance); alert('Withdrawal requested. It is pending admin approval.');
   } catch (e) { alert(e.message); }
 }
@@ -356,6 +438,8 @@ $('logoutBtn').addEventListener('click', logout);
 $('authSubmit').addEventListener('click', submitAuth);
 $('authToggle').addEventListener('click', () => { registering = !registering; renderAuth(); });
 $('authPass').addEventListener('keydown', e => { if (e.key === 'Enter') submitAuth(); });
+$('menuBtn').addEventListener('click', () => { const o = $('nav').classList.toggle('open'); $('menuBtn').setAttribute('aria-expanded', o); });
+renderPayTable();
 window.onload = init;
 </script>
 </body>
