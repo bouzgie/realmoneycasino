@@ -139,7 +139,7 @@ button.action-btn:hover { filter: brightness(1.1); }
 <script>
 let token = localStorage.getItem('token');
 let balance = 0;
-const API = window.API_BASE || ''; // set window.API_BASE if the backend is on another domain
+const API = window.API_BASE || (location.hostname.endsWith('github.io') ? 'https://real-money-casino-super-secret-2026.onrender.com' : ''); // set window.API_BASE if the backend is on another domain
 let registering = false;
 const $ = id => document.getElementById(id);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));

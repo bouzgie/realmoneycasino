@@ -3,6 +3,7 @@ services:
     name: realmoneycasino
     runtime: docker
     plan: starter
+    healthCheckPath: /healthz
     disk:
       name: data
       mountPath: /data

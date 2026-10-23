@@ -5,6 +5,7 @@ import jwt
 from fastapi import FastAPI, Depends, HTTPException, Header, Request, Form
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 DB = os.environ.get("DB_PATH", "casino.db")
@@ -13,6 +14,10 @@ WEBHOOK_SECRET = os.environ.get("PAYMENT_WEBHOOK_SECRET", "")
 MAX_BET = Decimal(os.environ.get("MAX_BET", "500"))
 rng = secrets.SystemRandom()
 app = FastAPI()
+app.add_middleware(CORSMiddleware, allow_origins=["https://bouzgie.github.io"], allow_methods=["*"], allow_headers=["*"])
+
+@app.get("/healthz")
+def healthz(): return {"ok": True}
 
 def db():
     c = sqlite3.connect(DB, isolation_level=None)
