@@ -6,7 +6,8 @@ from fastapi import FastAPI, Depends, HTTPException, Header, Request, Form
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+import re
 
 DB = os.environ.get("DB_PATH", "casino.db")
 SECRET = os.environ.get("JWT_SECRET") or secrets.token_hex(32)  # set JWT_SECRET in production
@@ -121,6 +122,13 @@ class Reg(BaseModel):
     username: str = Field(min_length=3, max_length=30, pattern=r"^[A-Za-z0-9_]+$")
     email: str = Field(max_length=100)
     password: str = Field(min_length=8, max_length=100)
+
+    @field_validator("password")
+    @classmethod
+    def password_rules(cls, v):
+        if not (re.search(r"[A-Za-z]", v) and re.search(r"\d", v)):
+            raise ValueError("Password must contain at least one letter and one number")
+        return v
 
 @app.post("/register")
 def register(r: Reg, request: Request):
@@ -265,6 +273,14 @@ async def webhook(request: Request, x_signature: str = Header("")):
 class WdReq(BaseModel):
     amount: float
     details: str = Field(max_length=300)
+
+    @field_validator("details")
+    @classmethod
+    def details_required(cls, v):
+        v = v.strip()
+        if not v:
+            raise ValueError("Payout details are required")
+        return v
 
 @app.post("/wallet/withdraw")
 def withdraw(r: WdReq, u=Depends(user_from_token)):
